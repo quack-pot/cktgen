@@ -1,7 +1,7 @@
-from .static_sparse_dag import StaticSparseDAG, StaticSparseDAGCreateInfo, StaticSparseDAGTrainInfo
+from .standard_neural_dag import StandardNeuralDAG, StandardNeuralDAGCreateInfo, StandardNeuralDAGTrainInfo
 
 __all__ = [
-    "StaticSparseDAG",
-    "StaticSparseDAGCreateInfo",
-    "StaticSparseDAGTrainInfo",
+    "StandardNeuralDAG",
+    "StandardNeuralDAGCreateInfo",
+    "StandardNeuralDAGTrainInfo",
 ]

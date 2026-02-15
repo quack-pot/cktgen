@@ -3,13 +3,13 @@ import dataclasses
 from .. import graphs
 
 @dataclasses.dataclass
-class StaticSparseDAGCreateInfo:
+class StandardNeuralDAGCreateInfo:
     input_node_count: int = 2
     hidden_node_count: int = 5
     output_node_count: int = 1
 
 @dataclasses.dataclass
-class StaticSparseDAGTrainInfo:
+class StandardNeuralDAGTrainInfo:
     input_data: list[list[float]]
     output_data: list[list[float]]
 
@@ -20,17 +20,16 @@ class StaticSparseDAGTrainInfo:
 
     lambda_edges: float = 1e-4
     lambda_nodes: float = 1e-3
-    lambda_discrete: float = 1e-5
-    node_threshold_strength: float = 10.0
+    node_strength_sharpness: float = 10.0
 
-class StaticSparseDAG():
+class StandardNeuralDAG():
     ## *=================================================
     ## *
     ## * __init__
     ## *
     ## *=================================================
 
-    def __init__(self, create_info: StaticSparseDAGCreateInfo) -> None:
+    def __init__(self, create_info: StandardNeuralDAGCreateInfo) -> None:
         super().__init__()
 
         # ? Static Sparse DAG Model Parameters
@@ -40,11 +39,12 @@ class StaticSparseDAG():
         self.output_node_count: int = int(max(1, create_info.output_node_count))
         self.total_node_count: int = self.input_node_count + self.hidden_node_count + self.output_node_count
 
-        # ? Weights and Biases (Initialized Randomly)
+        # ? Parameters
 
         self.weights: torch.nn.Parameter = torch.nn.Parameter(
-            torch.rand(self.total_node_count, self.total_node_count),
+            torch.rand(self.total_node_count, self.total_node_count)
         )
+
         self.biases: torch.nn.Parameter = torch.nn.Parameter(
             torch.rand(self.total_node_count),
         )
@@ -111,49 +111,6 @@ class StaticSparseDAG():
             return self.evaluateTensor(values_tensor).tolist()
         
         return self.evaluateTensor(torch.empty(0, dtype=dtype, device=device)).tolist()
-        
-    ## *=================================================
-    ## *
-    ## * __trainEpoch__
-    ## *
-    ## *=================================================
-
-    def __trainEpoch__(
-        self,
-        data: torch.Tensor,
-        target: torch.Tensor,
-        computeLoss: torch.nn.BCELoss,
-        optimizer: torch.optim.Adam,
-        lambda_edges: float,
-        lambda_nodes: float,
-        lambda_discrete: float,
-        node_threshold_strength: float
-    ) -> float:
-        optimizer.zero_grad()
-
-        output: torch.Tensor = self.__internalEvaluateTensor__(data)
-        loss: torch.Tensor = computeLoss(output, target)
-
-        outgoing_edges: torch.Tensor = torch.abs(self.weights * self.mask)
-
-        if lambda_edges != 0.0:
-            active_edge_count: torch.Tensor = outgoing_edges.sum()
-            loss += lambda_edges * active_edge_count
-
-        if lambda_nodes != 0.0:
-            outgoing_sums: torch.Tensor = torch.sum(outgoing_edges, dim=1)
-            node_activity: torch.Tensor = 1 - torch.exp(-node_threshold_strength * outgoing_sums)
-            active_node_count: torch.Tensor = node_activity.sum()
-            loss += lambda_nodes * active_node_count
-
-        if lambda_discrete != 0.0:
-            binary_penalty: torch.Tensor = (output * (1.0 - output)).sum()
-            loss += lambda_discrete * binary_penalty
-
-        loss.backward()
-        optimizer.step()
-
-        return float(loss.item())
 
     ## *=================================================
     ## *
@@ -161,7 +118,7 @@ class StaticSparseDAG():
     ## *
     ## *=================================================
 
-    def train(self, train_info: StaticSparseDAGTrainInfo) -> None:
+    def train(self, train_info: StandardNeuralDAGTrainInfo) -> None:
         assert (
             len(train_info.input_data) == len(train_info.output_data)
         ), f"Input and output sets do not match in length! (Input = {len(train_info.input_data)}; Output = {len(train_info.output_data)})"
@@ -173,39 +130,40 @@ class StaticSparseDAG():
         targets: torch.Tensor = torch.tensor(train_info.output_data, dtype=dtype, device=device)
 
         computeLoss: torch.nn.BCELoss = torch.nn.BCELoss()
-        optimizer = torch.optim.Adam([self.weights, self.biases], lr=train_info.learning_rate)
+        optimizer = torch.optim.SGD(
+            [self.weights, self.biases],
+            lr=train_info.learning_rate,
+        )
 
-        if train_info.epoch_print_cadence > 0:
-            for epoch in range(train_info.epochs):
-                total_loss: float = 0.0
+        for epoch in range(train_info.epochs):
+            total_loss: float = 0.0
 
-                for x, y in zip(data_set, targets):
-                    total_loss += self.__trainEpoch__(
-                        x,
-                        y,
-                        computeLoss,
-                        optimizer,
-                        train_info.lambda_edges,
-                        train_info.lambda_nodes,
-                        train_info.lambda_discrete,
-                        train_info.node_threshold_strength,
-                    )
+            annealing_value: float = float(epoch) / float(train_info.epochs)
+            lambda_edges: float = train_info.lambda_edges * annealing_value
+            lambda_nodes: float = train_info.lambda_nodes * annealing_value
 
-                if epoch % train_info.epoch_print_cadence == 0:
-                    print(f"StaticSparseDAG Training (Epoch = {epoch}; Loss = {total_loss:.4f})")
-        else:
-            for epoch in range(train_info.epochs):
-                for x, y in zip(data_set, targets):
-                    self.__trainEpoch__(
-                        x,
-                        y,
-                        computeLoss,
-                        optimizer,
-                        train_info.lambda_edges,
-                        train_info.lambda_nodes,
-                        train_info.lambda_discrete,
-                        train_info.node_threshold_strength,
-                    )
+            for x, y in zip(data_set, targets):
+                optimizer.zero_grad()
+
+                output: torch.Tensor = self.__internalEvaluateTensor__(x)
+                loss: torch.Tensor = computeLoss(output, y)
+
+                outgoing_edges: torch.Tensor = torch.abs(self.weights * self.mask)
+
+                edge_penalty: torch.Tensor = torch.abs(outgoing_edges).sum()
+                loss += lambda_edges * edge_penalty
+
+                outgoing_sum: torch.Tensor = torch.sum(outgoing_edges, dim=1)
+                node_penalty: torch.Tensor = (1.0 - torch.exp(-train_info.node_strength_sharpness * outgoing_sum)).sum()
+                loss += lambda_nodes * node_penalty
+
+                loss.backward()
+                optimizer.step()
+
+                total_loss += float(loss.item())
+
+            if epoch % train_info.epoch_print_cadence == 0:
+                print(f"StaticSparseDAG Training (Epoch = {epoch}; Loss = {total_loss:.4f})")
 
     ## *=================================================
     ## *
@@ -213,11 +171,11 @@ class StaticSparseDAG():
     ## *
     ## *=================================================
 
-    def extractDAG(self, activity_threshold: float = 0.1) -> graphs.Graph:
-        return graphs.Graph(graphs.GraphCreateInfo(
-            self.input_node_count,
-            self.output_node_count,
-            self.weights * self.mask,
-            self.biases,
-            activity_threshold
+    def extractDAG(self, edge_prune_threshold: float = 0.1) -> graphs.NeuralGraph:
+        return graphs.NeuralGraph(graphs.NeuralGraphCreateInfo(
+            input_node_count=self.input_node_count,
+            output_node_count=self.output_node_count,
+            edge_weights=self.weights * self.mask,
+            biases=self.biases,
+            edge_prune_threshold=edge_prune_threshold
         ))

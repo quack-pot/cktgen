@@ -1,6 +1,6 @@
-from .graph import Graph, GraphCreateInfo
+from .neural_graph import NeuralGraph, NeuralGraphCreateInfo
 
 __all__ = [
-    "Graph",
-    "GraphCreateInfo",
+    "NeuralGraph",
+    "NeuralGraphCreateInfo",
 ]
