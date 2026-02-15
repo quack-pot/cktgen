@@ -1,3 +1,3 @@
-# Min-DAG
+# Circuit Generators (CktGen)
 
 To be written...
