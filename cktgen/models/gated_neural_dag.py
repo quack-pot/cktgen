@@ -3,13 +3,13 @@ import dataclasses
 from .. import graphs
 
 @dataclasses.dataclass
-class StandardNeuralDAGCreateInfo:
+class GatedNeuralDAGCreateInfo:
     input_node_count: int = 2
     hidden_node_count: int = 5
     output_node_count: int = 1
 
 @dataclasses.dataclass
-class StandardNeuralDAGTrainInfo:
+class GatedNeuralDAGTrainInfo:
     input_data: list[list[float]]
     output_data: list[list[float]]
 
@@ -19,17 +19,16 @@ class StandardNeuralDAGTrainInfo:
     learning_rate: float = 0.05
 
     lambda_edges: float = 1e-4
-    lambda_nodes: float = 1e-5
-    node_strength_sharpness: float = 10.0
+    lambda_discrete: float = 1e-4
 
-class StandardNeuralDAG():
+class GatedNeuralDAG():
     ## *=================================================
     ## *
     ## * __init__
     ## *
     ## *=================================================
 
-    def __init__(self, create_info: StandardNeuralDAGCreateInfo) -> None:
+    def __init__(self, create_info: GatedNeuralDAGCreateInfo) -> None:
         super().__init__()
 
         # ? Static Sparse DAG Model Parameters
@@ -47,6 +46,10 @@ class StandardNeuralDAG():
 
         self.biases: torch.nn.Parameter = torch.nn.Parameter(
             torch.rand(self.total_node_count),
+        )
+
+        self.edge_gates: torch.nn.Parameter = torch.nn.Parameter(
+            torch.rand(self.total_node_count, self.total_node_count)
         )
 
         # ? Upper Triangular Mask (Enforces DAG Structure)
@@ -78,7 +81,9 @@ class StandardNeuralDAG():
         for idx in range(self.input_node_count, self.total_node_count):
             prev_states: torch.Tensor = torch.stack(states)
 
-            weights: torch.Tensor = self.weights[:idx, idx] * self.mask[:idx, idx]
+            edge_gate: torch.Tensor = torch.sigmoid(self.edge_gates[:idx, idx])
+
+            weights: torch.Tensor = self.weights[:idx, idx] * self.mask[:idx, idx] * edge_gate
             weighted_sum: torch.Tensor = torch.dot(weights, prev_states)
 
             node_value: torch.Tensor = torch.sigmoid(weighted_sum + self.biases[idx])
@@ -118,7 +123,7 @@ class StandardNeuralDAG():
     ## *
     ## *=================================================
 
-    def train(self, train_info: StandardNeuralDAGTrainInfo) -> None:
+    def train(self, train_info: GatedNeuralDAGTrainInfo) -> None:
         assert (
             len(train_info.input_data) == len(train_info.output_data)
         ), f"Input and output sets do not match in length! (Input = {len(train_info.input_data)}; Output = {len(train_info.output_data)})"
@@ -131,7 +136,7 @@ class StandardNeuralDAG():
 
         computeLoss: torch.nn.BCELoss = torch.nn.BCELoss()
         optimizer: torch.optim.Adam = torch.optim.Adam(
-            [self.weights, self.biases],
+            [self.weights, self.biases, self.edge_gates],
             lr=train_info.learning_rate,
         )
 
@@ -140,7 +145,7 @@ class StandardNeuralDAG():
 
             annealing_value: float = float(epoch) / float(train_info.epochs)
             lambda_edges: float = train_info.lambda_edges * annealing_value
-            lambda_nodes: float = train_info.lambda_nodes * annealing_value
+            lambda_discrete: float = train_info.lambda_discrete * annealing_value
 
             for x, y in zip(data_set, targets):
                 optimizer.zero_grad()
@@ -148,16 +153,13 @@ class StandardNeuralDAG():
                 output: torch.Tensor = self.__internalEvaluateTensor__(x)
                 loss: torch.Tensor = computeLoss(output, y)
 
-                outgoing_edges: torch.Tensor = torch.abs(self.weights * self.mask)
+                edge_activation: torch.Tensor = torch.sigmoid(self.edge_gates) * self.mask
 
-                edge_penalty: torch.Tensor = outgoing_edges.sum()
+                edge_penalty: torch.Tensor = edge_activation.sum()
                 loss += lambda_edges * edge_penalty
 
-                incoming_sum: torch.Tensor = outgoing_edges.sum(dim=0)
-                outgoing_sum: torch.Tensor = outgoing_edges.sum(dim=1)
-                node_mass: torch.Tensor = incoming_sum + outgoing_sum
-                node_penalty: torch.Tensor = (1.0 - torch.exp(-train_info.node_strength_sharpness * node_mass)).sum()
-                loss += lambda_nodes * node_penalty
+                edge_discrete_penalty: torch.Tensor = (edge_activation * (1.0 - edge_activation)).sum()
+                loss += lambda_discrete * edge_discrete_penalty
 
                 loss.backward()
                 optimizer.step()
@@ -165,7 +167,7 @@ class StandardNeuralDAG():
                 total_loss += float(loss.item())
 
             if epoch % train_info.epoch_print_cadence == 0:
-                print(f"StandardNeuralDAG Training (Epoch = {epoch}; Loss = {total_loss:.4f})")
+                print(f"GatedNeuralDAG Training (Epoch = {epoch}; Loss = {total_loss:.4f})")
 
     ## *=================================================
     ## *
@@ -177,7 +179,7 @@ class StandardNeuralDAG():
         return graphs.NeuralGraph(graphs.NeuralGraphCreateInfo(
             input_node_count=self.input_node_count,
             output_node_count=self.output_node_count,
-            edge_weights=self.weights * self.mask,
+            edge_weights=self.weights * self.mask * torch.sigmoid(self.edge_gates),
             biases=self.biases,
             edge_prune_threshold=edge_prune_threshold
         ))

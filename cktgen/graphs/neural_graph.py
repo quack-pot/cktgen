@@ -34,7 +34,8 @@ class NeuralGraph:
         pruned_weights[torch.abs(pruned_weights) <= create_info.edge_prune_threshold] = 0.0
 
         incoming_strength: torch.Tensor = torch.abs(pruned_weights).sum(dim=0)
-        dead_nodes: torch.Tensor = (incoming_strength == 0)
+        outgoing_strength: torch.Tensor = torch.abs(pruned_weights).sum(dim=1)
+        dead_nodes: torch.Tensor = ((incoming_strength + outgoing_strength) == 0)
 
         hidden_start: int = self.input_node_count
         hidden_end: int = raw_node_count - self.output_node_count
